@@ -31,9 +31,9 @@ module.exports = (app, auth) => {
     const s = owned(req.params.id, req.user.teacher_id);
     if (!s) return res.status(404).json({ error: 'غير موجودة' });
     res.json(db.prepare(
-      `SELECT st.full_name AS student, g.old_status AS oldStatus, g.new_status AS newStatus, COALESCE(t.full_name, eu.email) AS editor, g.edited_at AS at
+      `SELECT st.full_name AS student, g.old_status AS oldStatus, g.new_status AS newStatus, t.full_name AS editor, g.edited_at AS at
        FROM attendance_edit_logs g JOIN attendance_records r ON r.id = g.record_id JOIN students st ON st.id = r.student_id
-       JOIN users eu ON eu.id = g.edited_by LEFT JOIN teachers t ON t.user_id = eu.id WHERE r.session_id = ? ORDER BY g.id DESC`).all(s.id));
+       JOIN teachers t ON t.user_id = g.edited_by WHERE r.session_id = ? ORDER BY g.id DESC`).all(s.id));
   });
 
   app.patch('/api/records/:id', auth('api'), (req, res) => {

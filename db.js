@@ -75,25 +75,10 @@ CREATE TABLE IF NOT EXISTS course_students (
   student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE RESTRICT,
   PRIMARY KEY (course_id, student_id)
 );
-CREATE TABLE IF NOT EXISTS auth_codes (
-  email TEXT PRIMARY KEY,
-  code_hash TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 -- السجل دائم: لا حذف ولا تعديل
 CREATE TRIGGER IF NOT EXISTS edit_logs_no_delete BEFORE DELETE ON attendance_edit_logs
 BEGIN SELECT RAISE(ABORT, 'edit log is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS edit_logs_no_update BEFORE UPDATE ON attendance_edit_logs
 BEGIN SELECT RAISE(ABORT, 'edit log is immutable'); END;
 `);
-db.getSecret = () => {
-  const r = db.prepare("SELECT value FROM settings WHERE key = 'jwt_secret'").get();
-  if (r) return r.value;
-  const v = require('crypto').randomBytes(48).toString('hex');
-  db.prepare("INSERT INTO settings (key, value) VALUES ('jwt_secret', ?)").run(v);
-  return v;
-};
 module.exports = db;
