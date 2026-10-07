@@ -1,73 +1,78 @@
-require('dotenv').config();
-const path = require('path');
 const express = require('express');
-const helmet = require('helmet');
-const cookieParser = require('cookie-parser');
-const rateLimit = require('express-rate-limit');
+const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const db = require('./db');
-
-const SECRET = process.env.JWT_SECRET;
-if (!SECRET || SECRET.length < 32) { console.error('JWT_SECRET مفقود أو أقصر من 32 حرفًا'); process.exit(1); }
-const PROD = process.env.NODE_ENV === 'production';
-const DUMMY_HASH = bcrypt.hashSync('dummy-password', 12); // لتوحيد زمن الاستجابة
+const cookieParser = require('cookie-parser');
+const path = require('path');
+require('dotenv').config();
 
 const app = express();
-app.disable('x-powered-by');
-if (PROD) app.set('trust proxy', 1); // خلف وكيل الاستضافة (HTTPS)
-app.use(helmet({ contentSecurityPolicy: { directives: {
-  defaultSrc: ["'self'"],
-  styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-  fontSrc: ['https://fonts.gstatic.com'],
-  imgSrc: ["'self'", 'data:'],
-} } }));
-app.use(express.json({ limit: '10kb' }));
+const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key_32_characters_minimum';
+
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
+app.use(express.static(path.join(__dirname, 'public')));
 
-function auth(kind) {
-  return (req, res, next) => {
-    try {
-      const p = jwt.verify(req.cookies.token, SECRET);
-      const user = db.prepare('SELECT u.id, u.username, t.id AS teacher_id, t.full_name FROM users u JOIN teachers t ON t.user_id = u.id WHERE u.id = ?').get(p.uid);
-      if (!user) throw new Error('no user');
-      req.user = user; next();
-    } catch {
-      kind === 'page' ? res.redirect('/login') : res.status(401).json({ error: 'غير مصرح' });
-    }
-  };
-}
-
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false,
-  message: { error: 'محاولات كثيرة، حاول لاحقًا' } });
-
-app.post('/api/login', loginLimiter, (req, res) => {
-  const { username, password } = req.body || {};
-  if (typeof username !== 'string' || typeof password !== 'string') return res.status(400).json({ error: 'بيانات غير صالحة' });
-  const row = db.prepare('SELECT id, password_hash FROM users WHERE username = ? OR email = ?').get(username.trim(), username.trim());
-  const ok = bcrypt.compareSync(password, row ? row.password_hash : DUMMY_HASH);
-  if (!row || !ok) return res.status(401).json({ error: 'بيانات الدخول غير صحيحة' });
-  const token = jwt.sign({ uid: row.id }, SECRET, { expiresIn: '8h' });
-  res.cookie('token', token, { httpOnly: true, sameSite: 'strict', secure: PROD, maxAge: 8 * 3600 * 1000 });
-  res.json({ ok: true });
+// Database Setup
+const dbFile = path.join(__dirname, 'database.db');
+const db = new sqlite3.Database(dbFile, (err) => {
+  if (err) {
+    console.error('Error opening database', err.message);
+  } else {
+    console.log('Connected to the SQLite database.');
+  }
 });
-app.post('/api/logout', (req, res) => { res.clearCookie('token'); res.json({ ok: true }); });
-app.get('/api/me', auth('api'), (req, res) => res.json({ name: req.user.full_name }));
 
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public/index.html')));
-app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public/login.html')));
-app.get('/dashboard', auth('page'), (req, res) => res.sendFile(path.join(__dirname, 'views/dashboard.html')));
-app.use('/js', express.static(path.join(__dirname, 'public/js')));
+// Initialize Tables
+db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE,
+    password TEXT,
+    role TEXT
+  )`);
 
-app.get('/a/:token', (req, res) => res.sendFile(path.join(__dirname, 'public/student.html')));
-require('./routes/attendance')(app, auth);
-require('./routes/records')(app, auth);
-require('./routes/reports')(app, auth);
-require('./routes/roster')(app, auth);
-app.get('/display', auth('page'), (req, res) => res.sendFile(path.join(__dirname, 'views/display.html')));
-app.get('/roster', auth('page'), (req, res) => res.sendFile(path.join(__dirname, 'views/roster.html')));
-app.get('/stats', auth('page'), (req, res) => res.sendFile(path.join(__dirname, 'views/stats.html')));
-app.get('/lectures', auth('page'), (req, res) => res.sendFile(path.join(__dirname, 'views/lectures.html')));
-app.get('/lectures/:id', auth('page'), (req, res) => res.sendFile(path.join(__dirname, 'views/lecture.html')));
+  db.run(`CREATE TABLE IF NOT EXISTS attendance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    userId INTEGER,
+    timestamp TEXT,
+    status TEXT,
+    FOREIGN KEY(userId) REFERENCES users(id)
+  )`);
+});
 
-app.listen(process.env.PORT || 3000, () => console.log('running'));
+// Basic Routes
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Example Login Route (Adapted for sqlite3 async style)
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body;
+  
+  db.get(`SELECT * FROM users WHERE username = ?`, [username], async (err, user) => {
+    if (err) {
+      return res.status(500).json({ error: 'Database error' });
+    }
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    if (!isValidPassword) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
+    res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production' });
+    res.json({ message: 'Login successful' });
+  });
+});
+
+// Start Server
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
