@@ -16,7 +16,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Database Setup
+// Database Setup (Directly inside server.js to avoid MODULE_NOT_FOUND errors)
 const dbFile = path.join(__dirname, 'database.db');
 const db = new sqlite3.Database(dbFile, (err) => {
   if (err) {
@@ -44,12 +44,12 @@ db.serialize(() => {
   )`);
 });
 
-// Basic Routes
+// Basic Route
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Example Login Route (Adapted for sqlite3 async style)
+// Login Route Example
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body;
   
